@@ -197,7 +197,7 @@ mv obj/kern/kernel.img~ obj/kern/kernel.img
 链接得到的`obj/boot/boot.out`中的text段被取出来copy到`obj/boot/boot`，在执行`boot/sign.pl`,其作用为将`obj/boot/boot`填充到512个字节，并将最后两个字节写为`0x55 0xAA`。
 
 ```shell
-# perl
+# boot/sign.pl
 $buf .= "\0" x (510-$n) # 将$n到510byte全部填充为0
 $buf .= "\x55\xAA";	# 最后两个byte写为55AA
 # shell
@@ -218,11 +218,18 @@ $ xxd -l 512 obj/boot/boot
 
 接着是几条`dd`开头的命令
 
-从input file: /dev/zero,复制10000个bs (大小默认为512 byte) 到output file: obj/kern/kernel.img~，即kernel.img~中内容全为0。
+```shell
+dd if=/dev/zero of=obj/kern/kernel.img~ count=10000 2>/dev/null #1
+dd if=obj/boot/boot of=obj/kern/kernel.img~ conv=notrunc 2>/dev/null #2
+dd if=obj/kern/kernel of=obj/kern/kernel.img~ seek=1 conv=notrunc 2>/dev/null #3
+mv obj/kern/kernel.img~ obj/kern/kernel.img
+```
 
-将`obj/boot/boot`中的内容复制到kernel.img~，conv=notrunc表示不要截断output文件。
+\#1从input file: /dev/zero,复制10000个bs (大小默认为512 byte) 到output file: obj/kern/kernel.img~，即kernel.img~中内容全为0。
 
-将`obj/ker/kernel`中的内容复制到kernel.img~，seek=1 表示跳过第一个bs，即512 byte。
+\#2将`obj/boot/boot`中的内容复制到kernel.img~，conv=notrunc表示不要截断output文件。
+
+\#3将`obj/ker/kernel`中的内容复制到kernel.img~，seek=1 表示跳过第一个bs，即512 byte。
 
 即将`obj/boot/boot`放在第一个扇区，作为MBR，`obj/kern/kernel`放在随后的扇区中。
 
@@ -234,4 +241,201 @@ $ xxd -l 512 obj/boot/boot
  +--------+--------+--------+
 ```
 
-### The PC's Physical Address Space
+---
+
+## The PC's Physical Address Space
+
+80386最高可以寻址4GB的物理地址空间。下面是物理地址空间的分布情况，某些特定的地址是通过硬连线(hard-wired)到内存上。
+
+```
+
++------------------+  <- 0xFFFFFFFF (4GB)
+|      32-bit      |
+|  memory mapped   |
+|     devices      |
+|                  |
+/\/\/\/\/\/\/\/\/\/\
+
+/\/\/\/\/\/\/\/\/\/\
+|                  |
+|      Unused      |
+|                  |
++------------------+  <- depends on amount of RAM
+|                  |
+|                  |
+| Extended Memory  |
+|                  |
+|                  |
++------------------+  <- 0x00100000 (1MB)
+|     BIOS ROM     |
++------------------+  <- 0x000F0000 (960KB)
+|  16-bit devices, |
+|  expansion ROMs  |
++------------------+  <- 0x000C0000 (768KB)
+|   VGA Display    |
++------------------+  <- 0x000A0000 (640KB)
+|                  |
+|    Low Memory    |
+|                  |
++------------------+  <- 0x00000000
+```
+
+早期CPU，例如16位的8086，最多可以寻址1MB的物理地址空间(地址线只有20位)。所以早期的设计人员选择将低640KB作为程序使用的地址空间，640KB以上的部分保留给系统使用。BIOS放在1MB的最后一个64KB的区域。
+
+80386是第一款32位的CPU，最大寻址空间来到4GB(地址线有32位)。为了保证兼容以前的CPU，因此0-1MB的地址仍然保持原来的样子。4GB的高位空间被用于一些高速设备的memory map IO。现代64位处理器的寻址空间远大于4GB，但是同样的为了保证前向兼容，处理器保留低地址的1MB，与4GB附近的memory mapped devices空间。
+
+JOS中最多使用256MB的物理内存。
+
+---
+
+## The ROM BIOS
+
+> **Exercise #2**
+> Use GDB's si (Step Instruction) command to trace into the ROM BIOS for a few more instructions, and try to guess what it might be doing. You might want to look at Phil Storrs I/O Ports Description, as well as other materials on the 6.828 reference materials page. No need to figure out all the details - just the general idea of what the BIOS is doing first.
+
+按照Lab说明执行`make qemu-nox-gdb`，并在另一个shell中执行`make gdb`就可以看到qemu停在了[F000:FFF0]处
+
+```
+The target architecture is assumed to be i8086
+[f000:fff0]    0xffff0:	ljmp   $0xf000,$0xe05b
+0x0000fff0 in ?? ()
++ symbol-file obj/kern/kernel
+(gdb) 
+```
+
+由于刚开始启动时，PC处于16位的实模式([实模式介绍](../appendix/x86_assembly.md))之下，F000:FFF0转化为物理地址为FFFF0(0xF000 * 16 + 0xFFF0)，这个地址是硬件连线来控制的，当PC通电之后CS:IP就被赋值为F000:FFF0，开始执行BIOS。
+
+```
+[f000:fff0]    0xffff0:	ljmp   $0xf000,$0xe05b #跳转到地址 0xfe05b
+(gdb) si
+[f000:e05b]    0xfe05b:	cmpl   $0x0,%cs:0x6ac8 
+```
+
+下面就是BIOS的具体执行过程了，由于涉及到的(无关)细节比较多，所以我选择看源码，不一句一句看汇编了。qemu使用的默认bios是seabios [^1]，源码在github上[^2]，根据seabios文档中execution and code flow[^3]的描述，主要执行了这三个函数`reset_vector() -> entry_post() -> handle_post() `
+```
+# src/romlayout.s
+reset_vector:
+        ljmpw $SEG_BIOS, $entry_post		# #define SEG_BIOS 0xf000
+        // 0xfff5 - BiosDate in misc.c
+        // 0xfffe - BiosModelId in misc.c
+        // 0xffff - BiosChecksum in misc.c
+        .end
+--------------------------------------------
+# src/romlayout.s
+        // Specify a location in the fixed part of bios area.
+        .macro ORG addr
+        .section .fixedaddr.\addr
+        .endm
+        ORG 0xe05b
+entry_post:
+        cmpl $0, %cs:HaveRunPost                // Check for resume/reboot
+        jnz entry_resume
+        ENTRY_INTO32 _cfunc32flat_handle_post   // Normal entry point
+----------------------------------------------
+# src/post.c
+// Entry point for Power On Self Test (POST) - the BIOS initilization
+// phase.  This function makes the memory at 0xc0000-0xfffff
+// read/writable and then calls dopost().
+void VISIBLE32FLAT
+handle_post(void)
+{
+    if (!CONFIG_QEMU && !CONFIG_COREBOOT)
+        return;
+    serial_debug_preinit();
+    debug_banner();
+    // Check if we are running under Xen.
+    xen_preinit();
+    // Allow writes to modify bios area (0xf0000)
+    make_bios_writable();
+    // Now that memory is read/writable - start post process.
+    dopost();
+}
+
+```
+
+可以看到`reset_vector`的第一句指令就是qemu中看到的`ljmp   $0xf000,$0xe05b`，跳转到了`src/romlayout.s/entry_post`
+
+> 如果你对ljmp后面的几条指令感兴趣：
+>
+> ```
+> 0xffff0:	ljmp   $0xf000,$0xe05b
+> 0xffff5:	xor    %dh,0x322f
+> 0xffff9:	xor    (%bx),%bp
+> 0xffffb:	cmp    %di,(%bx,%di)
+> 0xffffd:	add    %bh,%ah
+> 0xfffff:	add    %al,(%bx,%si)	# 0x00被interpret成add指令
+> ```
+>
+> 这里的xor指令实际上是reset vetor中注释说的 bios data， 把内存0xffff5打印出来：
+>
+> ```
+> (gdb) x/20bx 0xffff5
+> 0xffff5:	0x30	0x36	0x2f	0x32	0x33	0x2f	0x39	0x39
+> 0xffffd:	0x00	0xfc	0x00	0x00	0x00	0x00	0x00	0x00
+> 0x100005:	0x00	0x00	0x00	0x00
+> ------
+> # misc.c
+> char BiosDate[] VARFSEGFIXED(0xfff5) = "06/23/99";
+> u8 BiosModelId VARFSEGFIXED(0xfffe) = BUILD_MODEL_ID; # BUILD_MODEL_ID=0xFC
+> u8 BiosChecksum VARFSEGFIXED(0xffff);
+> ```
+> `06/23/99`对应的hex为 30 36 2F 32 33 2F 39 39。 所以ljmp后面的指令实际上是bios的data，被翻译成了xor, add等指令
+
+`entry_post`检查是否经过POST即Power-On Self-Testing，如果是已经自检过就跳到resume，如果不是就进入`handle_post`。`handle_post`做一些check之后，让bios部分的内存变为writable，之后正式开始POST：
+
+``` c
+# src/post.c
+// Setup for code relocation and then relocate.
+void VISIBLE32INIT
+dopost(void)
+{
+    code_mutable_preinit();
+    // Detect ram and setup internal malloc.
+    qemu_preinit();
+    coreboot_preinit();
+    malloc_preinit();
+    // Relocate initialization code and call maininit().
+    reloc_preinit(maininit, NULL);
+}
+-------------------------
+#src/post.c
+// Main setup code.
+static void
+maininit(void)
+{
+    // Initialize internal interfaces.
+    interface_init();
+    // Setup platform devices.
+    platform_hardware_setup();
+    // Start hardware initialization (if threads allowed during optionroms)
+    if (threads_during_optionroms())
+        device_hardware_setup();
+    // Run vga option rom
+    vgarom_setup();
+    sercon_setup();
+    enable_vga_console();
+    // Do hardware initialization (if running synchronously)
+    if (!threads_during_optionroms()) {
+        device_hardware_setup();
+        wait_threads();
+    }
+    // Run option roms
+    optionrom_setup();
+    // Allow user to modify overall boot order.
+    interactive_bootmenu();
+    wait_threads();
+    // Prepare for boot.
+    prepareboot();
+    // Write protect bios memory.
+    make_bios_readonly();
+    // Invoke int 19 to start boot process.
+    startBoot();
+}
+```
+
+`post`先init自己的malloc函数，之后调用了`maininit`。`maininit`之中进行一些初始化，最后调用`startBoot()`，其具体作用是清除之前用到的low-memory部分的内存。再调用`int 0x19`，作用为**将磁盘第一个扇区的512 Byte读入到0x7C 00位置**，并且开始执行0x7C00处的代码，也就是执行上面的`obj/boot/boot`代码。
+
+----
+[^1]: [seabios document]( https://seabios.org/Developer_Documentation)
+[^2]: [seabios github]( https://github.com/coreboot/seabios)
+[^3]: [execution and code flow](https://seabios.org/Execution_and_code_flow)
