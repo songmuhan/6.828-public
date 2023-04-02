@@ -72,7 +72,7 @@ K>
 
 到这里我们成功的boot了jos，如果在整个过程中出错，大概率是工具链配置错误，最简单的解决方法是选择使用虚拟机:)。
 
-### What happens when make & make qemu ?
+### What happens when make ?
 
 如果你对`make`与`make qemu-nox`的具体细节不感兴趣，可以跳过。但我强烈建议你读一读这一部分内容。
 
@@ -234,3 +234,4 @@ $ xxd -l 512 obj/boot/boot
  +--------+--------+--------+
 ```
 
+### The PC's Physical Address Space
