@@ -211,7 +211,7 @@ obj/boot/boot: DOS/MBR boot sector
 $ xxd -l 512 obj/boot/boot
 00000000: fafc 31c0 8ed8 8ec0 8ed0 e464 a802 75fa  ..1........d..u. 
 00000010: b0d1 e664 e464 a802 75fa b0df e660 0f01  ...d.d..u....`..
-...                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+...                                                                                                  
 000001e0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
 000001f0: 0000 0000 0000 0000 0000 0000 0000 55aa  ..............U.
 ```
@@ -311,7 +311,7 @@ The target architecture is assumed to be i8086
 [f000:e05b]    0xfe05b:	cmpl   $0x0,%cs:0x6ac8 
 ```
 
-下面就是BIOS的具体执行过程了，由于涉及到的(无关)细节比较多，所以我选择看源码，不一句一句看汇编了。qemu使用的默认bios是seabios [^1]，源码在github上[^2]，根据seabios文档中execution and code flow[^3]的描述，主要执行了这三个函数`reset_vector() -> entry_post() -> handle_post() `
+下面就是BIOS的具体执行过程了，由于涉及到的(无关)细节比较多，所以我选择看源码，不一句一句看汇编了。qemu使用的默认bios是[seabios](https://seabios.org) ，源码在[github](https://github.com/coreboot/seabios)上，根据seabios文档中[execution and code flow](https://seabios.org/Execution_and_code_flow)的描述，主要执行了这三个函数`reset_vector() -> entry_post() -> handle_post() `
 ```
 # src/romlayout.s
 reset_vector:
@@ -435,7 +435,7 @@ maininit(void)
 
 `post`先init自己的malloc函数，之后调用了`maininit`。`maininit`之中进行一些初始化，最后调用`startBoot()`，其具体作用是清除之前用到的low-memory部分的内存。再调用`int 0x19`，作用为**将磁盘第一个扇区的512 Byte读入到0x7C 00位置**，并且开始执行0x7C00处的代码，也就是执行上面的`obj/boot/boot`代码。
 
-----
-[^1]: [seabios document]( https://seabios.org/Developer_Documentation)
-[^2]: [seabios github]( https://github.com/coreboot/seabios)
-[^3]: [execution and code flow](https://seabios.org/Execution_and_code_flow)
+大致流程如下：
+
+![bios procedure](picture/bios.png)
+
