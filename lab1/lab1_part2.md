@@ -181,6 +181,134 @@ protcseg:
   call bootmain
 ```
 
-在`ljmp`中的`$PROT_MODE_CSEG`为0x8，选择GDT的第二个entry，其中的base为0，所以进入到protcseg，接着设置好对应的segment selector与stack pointer，跳转到bootmain。bootmain将kernel读入内存。
+在`ljmp`中的`$PROT_MODE_CSEG`为0x8，选择GDT的第二个entry，其中的base为0，所以进入到protcseg label对应的代码，接着设置好对应的segment selector与stack pointer，跳转到bootmain。bootmain将kernel读入内存。
 
 ## bootmain.c
+
+在前面kernel.img已经讲过了kernel是怎么生成出来的。这里的kernel在磁盘的第二个扇区以ELF的形式存在。第一个扇区是bootloader，即boot.S与bootmain.c。
+
+如果你对ELF不太了解，可以参考Appendix中的[ELF](../appendix/elf.md)一章。
+
+首先将ELF的header从磁盘中读入到内存中：
+
+```c
+#define ELFHDR		((struct Elf *) 0x10000) // scratch space	
+// read 1st page off disk
+	readseg((uint32_t) ELFHDR, SECTSIZE*8, 0);
+```
+
+这里ELFHDR存放在内存的地址应该是没被占用的任意地址(?)。ELF header的大小是固定的, 7f 45 4c 46是ELF文件的magic number，对应的ascii码为`elf.`。
+
+```shell
+$ readelf -h obj/kern/kernel
+ELF Header:
+  Magic:   7f 45 4c 46 01 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF32
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Intel 80386
+  Version:                           0x1
+  Entry point address:               0x10000c
+  Start of program headers:          52 (bytes into file)
+  Start of section headers:          108968 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               52 (bytes)
+  Size of program headers:           32 (bytes)
+  Number of program headers:         2
+  Size of section headers:           40 (bytes)
+  Number of section headers:         11
+  Section header string table index: 8
+```
+
+我们需要将Program Header中指明的段读入内存对应位置，具体位置由program header给出
+
+```shell
+$ i386-jos-elf-objdump -h obj/kern/kernel
+
+obj/kern/kernel:     file format elf32-i386
+
+Sections:
+Idx Name          Size      VMA       LMA       File off  Algn
+  0 .text         0000178e  f0100000  00100000  00001000  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+  1 .rodata       00000704  f01017a0  001017a0  000027a0  2**5
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  2 .stab         000044d1  f0101ea4  00101ea4  00002ea4  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  3 .stabstr      00008afa  f0106375  00106375  00007375  2**0
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  4 .data         0000a300  f010f000  0010f000  00010000  2**12
+                  CONTENTS, ALLOC, LOAD, DATA
+  5 .bss          00000648  f0119300  00119300  0001a300  2**5
+                  CONTENTS, ALLOC, LOAD, DATA
+```
+
+`.stab, .stabstr`段用于debug。
+
+将每一个段都读到program header中指定的`ph->p_pa`处，这里的`ph->p_pa`即为`LMA`，Linear Memory Address，是经过segment selector 映射后的地址，可以理解为memory的物理地址。
+
+
+```c
+	ph = (struct Proghdr *) ((uint8_t *) ELFHDR + ELFHDR->e_phoff);
+	eph = ph + ELFHDR->e_phnum;
+	for (; ph < eph; ph++)
+		// p_pa is the load address of this segment (as well
+		// as the physical address)
+		readseg(ph->p_pa, ph->p_memsz, ph->p_offset);
+
+	// call the entry point from the ELF header
+	// note: does not return!
+	((void (*)(void)) (ELFHDR->e_entry))();
+```
+
+读完之后，利用一个C语言的小trick，跳转到`e_entry`处，elf header中指明了`Entry point address:             0x10000c `，即`e_entry = 0x10000c`，跳转到kernel中的entry处。
+
+```
+.globl entry
+entry:
+	movw	$0x1234,0x472			# warm boot
+f0100000:	02 b0 ad 1b 00 00    	add    0x1bad(%eax),%dh
+f0100006:	00 00                	add    %al,(%eax)
+f0100008:	fe 4f 52             	decb   0x52(%edi)
+f010000b:	e4 66                	in     $0x66,%al
+
+f010000c <entry>:
+f010000c:	66 c7 05 72 04 00 00 	movw   $0x1234,0x472
+f0100013:	34 12 
+```
+
+注意这里的虚拟地址是`f010000c`而非entry的物理地址`010000c`，这一点在lab2中会详细说明。
+
+==todo: warm boot代码是什么意思？为什么需要warm boot== 
+
+接着来看一下这个C语言的小trick，一层一层来拆：
+
+```c
+((void (*)(void)) (ELFHDR->e_entry))();
+```
+
+这里是函数指针的运用，最后一个括号是函数的参数，为空，是对这个函数的调用，因此这个函数指针是
+
+```c
+(void (*)(void)) (ELFHDR->e_entry)
+```
+
+这里是将`ELFHDR->e_entry`转化成一个函数指针，类似于类型转换，只看转化的类型：
+
+```c
+void (*)(void)
+int (*pf)()
+```
+
+这个就跟常见的函数指针的申明类似了，只不过这个函数指针并没有名字，这个函数指针对应的函数的返回值为void，参数为void。
+
+所以这一句可以替换成简单的inline assembly
+
+```
+asm volatile("jmp *%0" : : "r" (ELFHDR->e_entry));
+```
+
+跳转之后进入kernel。
