@@ -246,7 +246,7 @@ mv obj/kern/kernel.img~ obj/kern/kernel.img
 ## The PC's Physical Address Space
 
 80386最高可以寻址4GB的物理地址空间。下面是物理地址空间的分布情况，某些特定的地址是通过硬连线(hard-wired)到内存上。
-
+### physical memory layout
 ```
 
 +------------------+  <- 0xFFFFFFFF (4GB)
