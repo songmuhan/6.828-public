@@ -157,3 +157,30 @@ relocated:
 在这一部分，需要明确cprintf函数的具体实现，涉及到的文件有`kern/printf.c`，`lib/printfmt.c`以及`kern/console.c`。暴露给kernel的函数是`cprintf`，三个c文件之间的调用关系如下图
 
 <img src="picture/printf.png" alt="printf" style="zoom:33%;" />
+
+==todo== console.c代码描述。
+
+实现printf的关键在于如何
+
+quick note:
+
+cprintf的实现依赖于`va_arg`
+
+<img src="picture/tmp/va_arg.png" alt="Screenshot 2023-04-10 at 19.14.47" style="zoom:33%;" />
+
+`va_list`的简单实现
+
+https://stackoverflow.com/questions/12371450/how-are-variable-arguments-implemented-in-gcc
+
+`va_arg`需要两个参数，一个是ap(va_list)，一个是参数的类型。参数类型指定如何“parse” va之后的数据。
+
+
+
+## Stack
+
+```
+	movl	$(bootstacktop),%esp
+f0100034:	bc 00 70 11 f0       	mov    $0xf0117000,%esp
+```
+
+data段在0xf010f000, kernel stack size = 8 page  -> bookstacktop = 0xf010f000 + 0x00008000;![Screenshot 2023-04-10 at 22.53.26](picture/tmp/stack.png)
