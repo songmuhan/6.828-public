@@ -153,3 +153,7 @@ relocated:
 
 
 #### Formatted Printing to the Console
+
+在这一部分，需要明确cprintf函数的具体实现，涉及到的文件有`kern/printf.c`，`lib/printfmt.c`以及`kern/console.c`。暴露给kernel的函数是`cprintf`，三个c文件之间的调用关系如下图
+
+<img src="picture/printf.png" alt="printf" style="zoom:33%;" />
