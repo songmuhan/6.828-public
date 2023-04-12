@@ -183,4 +183,10 @@ https://stackoverflow.com/questions/12371450/how-are-variable-arguments-implemen
 f0100034:	bc 00 70 11 f0       	mov    $0xf0117000,%esp
 ```
 
-data段在0xf010f000, kernel stack size = 8 page  -> bookstacktop = 0xf010f000 + 0x00008000;![Screenshot 2023-04-10 at 22.53.26](picture/tmp/stack.png)
+data段在0xf010f000, kernel stack size = 8 page  -> bookstacktop = 0xf010f000 + 0x00008000;
+
+![Screenshot 2023-04-10 at 22.53.26](picture/tmp/stack.png)
+
+
+
+![image-20230412103817278](picture/tmp/init.png)
