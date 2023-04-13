@@ -176,10 +176,9 @@ mem_init(void)
 
 	check_page_free_list(1);
 	check_page_alloc();
+	check_page();
     // stop at here 
     assert(false);
-	check_page();
-
 
 	//////////////////////////////////////////////////////////////////////
 	// Now we set up virtual memory
@@ -409,8 +408,30 @@ page_decref(struct PageInfo* pp)
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
-	// Fill this function in
-	return NULL;
+	pde_t *pde = &pgdir[PDX(va)];
+    if(!(*pde & PTE_P)){
+        // page table pointed by page directory entry is not present
+        if(create){
+            // create the page table first
+            struct PageInfo * page = page_alloc(ALLOC_ZERO);
+            if(page){
+                page->pp_ref += 1;
+                // write physical address of page table to pde
+                *pde = page2pa(page) | PTE_U | PTE_W | PTE_P;
+            }else{
+                // can not alloc a new page
+                return NULL;
+            }
+        }else{
+            // do not create
+            return NULL;
+        }
+    }
+    // page table base
+    pte_t *pte_base = (pte_t *)KADDR(PTE_ADDR(*pde));
+    // required page table entry
+    pte_t *pte = & pte_base[PTX(va)];
+	return pte;
 }
 
 //
@@ -427,7 +448,15 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 static void
 boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm)
 {
-	// Fill this function in
+	pte_t *pte;
+    for(uintptr_t current = 0; current < size; current += PGSIZE){
+        // create pte if corresoponding page table not exsit
+        pte = pgdir_walk(pgdir,(void *)(va + current), 1);
+        // this should never be NULL
+        assert(pte != NULL); 
+        *pte = (pa + current) | (perm | PTE_P);
+    }
+
 }
 
 //
@@ -458,8 +487,30 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 int
 page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
-	// Fill this function in
-	return 0;
+    // look up origin page at va
+	struct PageInfo *origin = page_lookup(pgdir,va,0);
+
+    // if origin page at va, remove it
+    if(origin){
+        page_remove(pgdir,va);
+        // invalidate the tlb, va map to different page
+        tlb_invalidate(pgdir,va);
+    }
+    // create pte if corresoponding page table not exsit
+    pte_t *pte = pgdir_walk(pgdir,va,1);
+    if(!pte){
+        return -E_NO_MEM;
+    }
+    else{
+        // corner case: check whether pp is the page we just free
+        if(pp == page_free_list){
+            // get the page
+            pp = page_alloc(0);
+        }
+        *pte = page2pa(pp) | (perm | PTE_P);
+        pp->pp_ref +=1;
+    }
+    return 0;
 }
 
 //
@@ -476,8 +527,21 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
-	// Fill this function in
-	return NULL;
+    struct PageInfo *page;
+    // do not create page table.
+	pte_t *pte = pgdir_walk(pgdir,va,0);
+    // if no pte or pte is not present
+    if( pte == NULL || !(*pte & PTE_P)){
+        return NULL;
+    }
+    
+    page  = pa2page((*pte));
+    if(pte_store){
+        // store address of pte to pte_store
+        *pte_store = pte;
+    }
+
+	return page;
 }
 
 //
@@ -498,7 +562,16 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 void
 page_remove(pde_t *pgdir, void *va)
 {
-	// Fill this function in
+	struct PageInfo *page = page_lookup(pgdir,va,0);
+    if(page){
+        page_decref(page);
+        pte_t *pte = pgdir_walk(pgdir,va,0);
+        if(pte){
+            // clear the pte
+            *pte = 0;
+            tlb_invalidate(pgdir,va);
+        }
+    }
 }
 
 //
